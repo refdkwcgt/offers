@@ -470,6 +470,26 @@ async def process_offer_accept(offer_id: int, seller_id: int) -> str:
         f"Мамонт: {user_display(seller_id)}"
     )
 
+    # Уведомляем покупателя
+    buyer_lang = get_lang(buyer_id) or "ru"
+    buyer_text = {
+        "ru": (
+            f"✅ Ваш оффер на {amount} ⭐️ за {nft_name} принят!\n\n"
+            f"Передайте NFT продавцу — как только он подтвердит получение, "
+            f"звёзды спишутся с вашего баланса."
+        ),
+        "en": (
+            f"✅ Your offer of {amount} ⭐️ for {nft_name} has been accepted!\n\n"
+            f"Transfer the NFT to the seller — once they confirm receipt, "
+            f"the stars will be deducted from your balance."
+        ),
+    }[buyer_lang]
+
+    try:
+        await bot.send_message(buyer_id, buyer_text)
+    except Exception as e:
+        logging.warning(f"Не удалось уведомить покупателя {buyer_id}: {e}")
+
     return t["accepted_message"]
 
 
@@ -506,6 +526,18 @@ async def process_offer_decline(offer_id: int, seller_id: int) -> str:
         f"Воркер: {user_display(buyer_id)}\n"
         f"Мамонт: {user_display(seller_id)}"
     )
+
+    # Уведомляем покупателя
+    buyer_lang = get_lang(buyer_id) or "ru"
+    buyer_text = {
+        "ru": f"❌ Ваш оффер на {amount} ⭐️ за {nft_name} отклонён.",
+        "en": f"❌ Your offer of {amount} ⭐️ for {nft_name} has been declined.",
+    }[buyer_lang]
+
+    try:
+        await bot.send_message(buyer_id, buyer_text)
+    except Exception as e:
+        logging.warning(f"Не удалось уведомить покупателя {buyer_id}: {e}")
 
     return t["declined_message"]
 
