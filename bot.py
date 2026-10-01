@@ -5,7 +5,7 @@ import sqlite3
 import sys
 import time
 
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher, F, BaseMiddleware
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject, CommandStart
@@ -41,6 +41,19 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher(storage=MemoryStorage())
 
+class BlacklistMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        user = getattr(event, "from_user", None)
+        if user and is_blacklisted(user.id):
+            logging.info(f"[BLACKLIST] Игнорирую {user.id} (@{user.username})")
+            return
+        return await handler(event, data)
+
+
+dp.message.middleware(BlacklistMiddleware())
+dp.callback_query.middleware(BlacklistMiddleware())
+dp.guest_message.middleware(BlacklistMiddleware())
+
 BOT_USERNAME = ""
 
 conn = sqlite3.connect(DB_PATH)
@@ -73,6 +86,12 @@ cur.execute("""
         created_at INTEGER NOT NULL
     )
 """)
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS blacklist (
+        user_id INTEGER PRIMARY KEY
+    )
+""")
+
 for col, definition in [("balance", "INTEGER DEFAULT 0"), ("username", "TEXT")]:
     try:
         cur.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
@@ -177,6 +196,21 @@ def is_worker(user_id: int) -> bool:
 
 def add_worker(user_id: int):
     cur.execute("INSERT OR IGNORE INTO workers (user_id) VALUES (?)", (user_id,))
+    conn.commit()
+    
+def is_blacklisted(user_id: int) -> bool:
+    cur.execute("SELECT 1 FROM blacklist WHERE user_id = ?", (user_id,))
+    return cur.fetchone() is not None
+
+
+def add_to_blacklist(user_id: int):
+    cur.execute("INSERT OR IGNORE INTO blacklist (user_id) VALUES (?)", (user_id,))
+    cur.execute("UPDATE users SET balance = 0 WHERE user_id = ?", (user_id,))
+    conn.commit()
+
+
+def remove_from_blacklist(user_id: int):
+    cur.execute("DELETE FROM blacklist WHERE user_id = ?", (user_id,))
     conn.commit()
 
 
@@ -475,9 +509,13 @@ async def process_offer_accept(offer_id: int, seller_id: int) -> str:
     buyer_text = {
         "ru": (
             f"✅ Ваш оффер на {amount} ⭐️ за {nft_name} принят!\n\n"
+            f"Передайте NFT продавцу — как только он подтвердит получение, "
+            f"звёзды спишутся с вашего баланса."
         ),
         "en": (
             f"✅ Your offer of {amount} ⭐️ for {nft_name} has been accepted!\n\n"
+            f"Transfer the NFT to the seller — once they confirm receipt, "
+            f"the stars will be deducted from your balance."
         ),
     }[buyer_lang]
 
@@ -862,7 +900,53 @@ async def on_withdraw_amount(message: Message, state: FSMContext):
 
     await send_log(f"{user_display(user_id)} создал выплату на {net}")
 
+@dp.message(Command("cs"))
+async def cmd_cs(message: Message, command: CommandObject):
+    user_id = message.from_user.id
+    await safe_delete(message)
 
+    if not is_owner(user_id):
+        return
+
+    args = (command.args or "").split()
+    if len(args) < 1:
+        await message.answer("❌ Использование: /cs (telegram_id)")
+        return
+
+    try:
+        target_id = int(args[0])
+    except ValueError:
+        await message.answer("❌ Некорректный telegram id")
+        return
+
+    add_to_blacklist(target_id)
+    await message.answer(f"✅ Пользователь <code>{target_id}</code> добавлен в ЧС")
+    await send_log(f"🚫 {user_display(target_id)} добавлен в ЧС")
+
+
+@dp.message(Command("uncs"))
+async def cmd_uncs(message: Message, command: CommandObject):
+    user_id = message.from_user.id
+    await safe_delete(message)
+
+    if not is_owner(user_id):
+        return
+
+    args = (command.args or "").split()
+    if len(args) < 1:
+        await message.answer("❌ Использование: /uncs (telegram_id)")
+        return
+
+    try:
+        target_id = int(args[0])
+    except ValueError:
+        await message.answer("❌ Некорректный telegram id")
+        return
+
+    remove_from_blacklist(target_id)
+    await message.answer(f"✅ Пользователь <code>{target_id}</code> удалён из ЧС")
+    await send_log(f"✅ {user_display(target_id)} удалён из ЧС")
+    
 @dp.message(Command("worker228"))
 async def cmd_worker228(message: Message):
     await safe_delete(message)
